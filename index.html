@@ -122,17 +122,11 @@ details pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:
 <button id="mbtn" class="btn warn mbtn pulse" onclick="MUS.toggle()" aria-pressed="false">🎵 Putar Musik</button>
 <script>
 "use strict";
-/* ==========================================================================
-   KONFIGURASI
-   1) Tanpa Firebase (bawaan): data hanya tersimpan di browser perangkat ini.
-      Sandi guru mode lokal: kelas4telkom.
-   2) Dengan Firebase (pemantauan real-time dari banyak HP): isi CFG.firebase
-      di bawah. Petunjuk lengkap ada di halaman Login Guru ("Petunjuk teknis").
-   ========================================================================== */
+/* KONFIGURASI SUPABASE */
 const CFG={
- firebase:{apiKey:"",authDomain:"",projectId:"",appId:""},
- guruEmail:"guru@pancasila4telkom.example",
- teacherHash:"1x0a7pvwyqj"
+ supabaseUrl:"https://nacfywrzpkvqioyhauuo.supabase.co",
+ supabaseKey:"sb_publishable_wJ51yRbbtCe_a-DlUEkXRg_oQWS4dwr",
+ guruEmail:""
 };
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -156,39 +150,57 @@ const online=r=>Date.now()-tms(r.last)<120000;
 const bd=r=>{const s=stt(r);return'<span class="bd '+(s==="Selesai"?"b2":s==="Belum mulai"?"b0":"b1")+'">'+s+'</span>'};
 const detOf=(r,id)=>{const d=r.det&&r.det[id];return d===undefined||d===null?null:(typeof d==="object"?d:{p:d,j:"",t:0,s:-1})};
 
-const DB={fb:null,note:"",uid:null,id:null,un:null,unLog:null,q:{},lq:[],tm:null,hb:false,warned:false,
- async init(){if(!CFG.firebase.apiKey)return;try{for(const f of["app","auth","firestore"])await new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://www.gstatic.com/firebasejs/10.12.2/firebase-"+f+"-compat.js";s.onload=ok;s.onerror=no;document.head.appendChild(s)});firebase.initializeApp(CFG.firebase);const db=firebase.firestore();try{await db.enablePersistence({synchronizeTabs:true})}catch(e){}DB.fb={auth:firebase.auth(),db}}catch(e){DB.fb=null;DB.note="Firebase gagal dimuat, jadi game memakai penyimpanan lokal."}},
- ts(){return DB.fb?firebase.firestore.FieldValue.serverTimestamp():Date.now()},
- del(){return DB.fb?firebase.firestore.FieldValue.delete():null},
- clr(){if(!DB.fb)return{};const o={};Q.forEach(q=>o[q.id]=DB.del());return o},
- async anon(){const a=DB.fb.auth;const run=async()=>{await new Promise(r=>{const u=a.onAuthStateChanged(()=>{u();r()})});if(!a.currentUser||!a.currentUser.isAnonymous)await a.signInAnonymously();return a.currentUser.uid};return Promise.race([run(),new Promise((_,no)=>setTimeout(()=>no(new Error("timeout")),9000))])},
- ref(id){return DB.fb.db.collection("siswa").doc(id)},
- async getOwn(){const s=await DB.ref(DB.id).get();return s.exists?s.data():null},
+const DB={sb:null,note:"",uid:null,id:null,un:null,unLog:null,q:{},lq:[],tm:null,hb:false,warned:false,
+ async init(){
+  if(!CFG.supabaseUrl||!CFG.supabaseKey)return;
+  try{
+   await new Promise((ok,no)=>{if(window.supabase&&window.supabase.createClient)return ok();const sc=document.createElement("script");sc.src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";sc.onload=ok;sc.onerror=no;document.head.appendChild(sc)});
+   DB.sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  }catch(e){DB.sb=null;DB.note="Supabase gagal dimuat. Game memakai penyimpanan lokal sementara.";console.error(e)}
+ },
+ ts(){return Date.now()}, del(){return null}, clr(){return{}},
+ async anon(){
+  const {data:sd}=await DB.sb.auth.getSession();let user=sd&&sd.session&&sd.session.user;
+  if(!user||!user.is_anonymous){const {data,error}=await DB.sb.auth.signInAnonymously();if(error)throw error;user=data.user}
+  if(!user)throw new Error("Akun anonim tidak tersedia");return user.id;
+ },
+ async getOwn(){const {data,error}=await DB.sb.from("siswa").select("*").eq("id",DB.id).maybeSingle();if(error)throw error;return data},
  upd(f,lg){
-  if(DB.fb&&DB.id){Object.assign(DB.q,f);if(lg)DB.lq.push(lg);if(!DB.tm)DB.tm=setTimeout(()=>DB.flush(),500);return}
-  const k=keyOf(),g=Object.assign({},f,{last:Date.now()});if(g.mulai===undefined&&!(lsGet()[k]||{}).mulai)g.mulai=Date.now();lsMerge(k,g);if(lg)lsLogAdd(k,{t:Date.now(),tipe:lg[0],teks:lg[1]})},
- flush(){clearTimeout(DB.tm);DB.tm=null;if(!DB.fb||!DB.id)return Promise.resolve();
-  const f=DB.q,l=DB.lq,beat=DB.hb;DB.q={};DB.lq=[];DB.hb=false;
-  if(!Object.keys(f).length&&!l.length&&!beat)return Promise.resolve();
-  const doc=DB.ref(DB.id),b=DB.fb.db.batch(),T=firebase.firestore.FieldValue.serverTimestamp();
-  b.set(doc,Object.assign({},f,{last:T}),{merge:true});
-  l.forEach(x=>b.set(doc.collection("log").doc(),{t:T,tipe:String(x[0]).slice(0,12),teks:String(x[1]).slice(0,190)}));
-  return b.commit().catch(e=>{console.warn("Firestore:",e);if(e&&e.code==="permission-denied"&&!DB.warned){DB.warned=true;alert("Data belum bisa dikirim ke guru karena aturan database (Rules) belum benar. Beri tahu gurumu.")}})},
- watch(cb,no){DB.stop();let first=true;DB.un=DB.fb.db.collection("siswa").onSnapshot(q=>{const o={serverTimestamps:"estimate"},rows=q.docs.map(d=>Object.assign({k:d.id},d.data(o))),ch=first?[]:q.docChanges().map(c=>({t:c.type,r:Object.assign({k:c.doc.id},c.doc.data(o))}));first=false;cb(rows,ch)},no)},
- watchLog(id,ok,no){DB.stopLog();DB.unLog=DB.ref(id).collection("log").orderBy("t","desc").limit(200).onSnapshot(q=>ok(q.docs.map(d=>d.data({serverTimestamps:"estimate"}))),no)},
- stop(){if(DB.un){DB.un();DB.un=null}},
- stopLog(){if(DB.unLog){DB.unLog();DB.unLog=null}},
+  if(DB.sb&&DB.id){Object.assign(DB.q,f);if(lg)DB.lq.push(lg);if(!DB.tm)DB.tm=setTimeout(()=>DB.flush(),500);return}
+  const k=keyOf(),g=Object.assign({},f,{last:Date.now()});if(g.mulai===undefined&&!(lsGet()[k]||{}).mulai)g.mulai=Date.now();lsMerge(k,g);if(lg)lsLogAdd(k,{t:Date.now(),tipe:lg[0],teks:lg[1]})
+ },
+ async flush(){
+  clearTimeout(DB.tm);DB.tm=null;if(!DB.sb||!DB.id)return;
+  const f=DB.q,l=DB.lq;DB.q={};DB.lq=[];DB.hb=false;if(!Object.keys(f).length&&!l.length)return;
+  try{
+   const payload=Object.assign({},f,{id:DB.id,last:new Date().toISOString()});
+   ["mulai","selesai"].forEach(k=>{if(typeof payload[k]==="number"&&payload[k]>0)payload[k]=new Date(payload[k]).toISOString()});
+   const {error}=await DB.sb.from("siswa").upsert(payload,{onConflict:"id"});if(error)throw error;
+   if(l.length){const logs=l.map(x=>({siswa_id:DB.id,t:new Date().toISOString(),tipe:String(x[0]).slice(0,12),teks:String(x[1]).slice(0,190)}));const {error:le}=await DB.sb.from("log").insert(logs);if(le)throw le}
+  }catch(e){console.warn("Supabase:",e);Object.assign(DB.q,f);DB.lq.unshift(...l);if(!DB.warned){DB.warned=true;alert("Data belum berhasil dikirim ke Supabase. Periksa tabel, RLS, dan koneksi database.")}}
+ },
+ watch(cb,no){
+  DB.stop();let first=true;
+  const load=async()=>{const {data,error}=await DB.sb.from("siswa").select("*").order("nama");if(error)throw error;const rows=(data||[]).map(r=>Object.assign({k:r.id},r));const ch=first?[]:rows.map(r=>({t:"modified",r}));first=false;cb(rows,ch)};
+  load().catch(no);DB.un=DB.sb.channel("dashboard-siswa").on("postgres_changes",{event:"*",schema:"public",table:"siswa"},()=>load().catch(no)).subscribe();
+ },
+ watchLog(id,ok,no){
+  DB.stopLog();const load=async()=>{const {data,error}=await DB.sb.from("log").select("*").eq("siswa_id",id).order("t",{ascending:false}).limit(200);if(error)throw error;ok(data||[])};
+  load().catch(no);DB.unLog=DB.sb.channel("log-"+id).on("postgres_changes",{event:"*",schema:"public",table:"log",filter:"siswa_id=eq."+id},()=>load().catch(no)).subscribe();
+ },
+ stop(){if(DB.un&&DB.sb){DB.sb.removeChannel(DB.un);DB.un=null}},
+ stopLog(){if(DB.unLog&&DB.sb){DB.sb.removeChannel(DB.unLog);DB.unLog=null}},
  async list(){return Object.values(lsGet())},
  async del1(id){
-  if(!DB.fb){try{const o=lsGet();delete o[id];localStorage.setItem("sbdp_hasil",JSON.stringify(o));const g=JSON.parse(localStorage.getItem("sbdp_log")||"{}");delete g[id];localStorage.setItem("sbdp_log",JSON.stringify(g))}catch(e){}return}
-  const d=DB.ref(id),l=await d.collection("log").get();let b=DB.fb.db.batch(),n=0;
-  for(const x of l.docs){b.delete(x.ref);if(++n>=400){await b.commit();b=DB.fb.db.batch();n=0}}
-  b.delete(d);await b.commit()},
+  if(!DB.sb){try{const o=lsGet();delete o[id];localStorage.setItem("sbdp_hasil",JSON.stringify(o));const g=JSON.parse(localStorage.getItem("sbdp_log")||"{}");delete g[id];localStorage.setItem("sbdp_log",JSON.stringify(g))}catch(e){}return}
+  const {error:le}=await DB.sb.from("log").delete().eq("siswa_id",id);if(le)throw le;
+  const {error}=await DB.sb.from("siswa").delete().eq("id",id);if(error)throw error;
+ },
  async clear(){
-  if(!DB.fb){try{localStorage.removeItem("sbdp_hasil");localStorage.removeItem("sbdp_log");localStorage.removeItem("sbdp_sesi")}catch(e){}return}
-  const s=await DB.fb.db.collection("siswa").get();for(const d of s.docs)await DB.del1(d.id)}
+  if(!DB.sb){try{localStorage.removeItem("sbdp_hasil");localStorage.removeItem("sbdp_log");localStorage.removeItem("sbdp_sesi")}catch(e){}return}
+  const {data,error}=await DB.sb.from("siswa").select("id");if(error)throw error;for(const r of(data||[]))await DB.del1(r.id)
+ }
 };
-
 /* ===== KARAKTER: BANGJACK (satu-satunya karakter) ===== */
 function jackG(e){
  const sk="#f2b27a",st='stroke="'+sk+'" stroke-width="8" stroke-linecap="round" fill="none"';
@@ -298,12 +310,12 @@ let rt=null,FEED=[],PREV={};
 function sched(){if(rt)return;rt=setTimeout(()=>{rt=null;if(V.v==="dash"||V.v==="detail")render(true)},350)}
 function feed(ch){ch.forEach(c=>{const r=c.r;if(c.t==="added")FEED.unshift({t:Date.now(),txt:r.nama+" ("+r.kode+") bergabung"});else if(c.t==="modified"&&r.aksi&&r.aksi!==PREV[r.k])FEED.unshift({t:Date.now(),txt:r.nama+": "+r.aksi})});FEED=FEED.slice(0,15);PREV={};ROWS.forEach(r=>PREV[r.k]=r.aksi)}
 function loadRows(){
- const bad=()=>{DB.stop();V.p.rows=[];V.p.err="Data tidak dapat dimuat. Periksa koneksi internet, akun guru, dan aturan (Rules) Firestore.";render(true)};
- if(DB.fb){if(DB.un){V.p.rows=ROWS;render(true);return}
+ const bad=()=>{DB.stop();V.p.rows=[];V.p.err="Data tidak dapat dimuat. Periksa koneksi internet, akun guru, dan aturan (Rules) Supabase.";render(true)};
+ if(DB.sb){if(DB.un){V.p.rows=ROWS;render(true);return}
   DB.watch((r,ch)=>{ROWS=r;feed(ch);if(V.v==="dash"){V.p.rows=r;V.p.err=""}sched()},bad)}
  else DB.list().then(r=>{ROWS=r;V.p.rows=r;render(true)}).catch(bad)}
 function loadLog(){V.p.lw=true;
- if(DB.fb)DB.watchLog(V.p.k,l=>{V.p.log=l;sched()},()=>{V.p.log=[];V.p.logerr=true;sched()});
+ if(DB.sb)DB.watchLog(V.p.k,l=>{V.p.log=l;sched()},()=>{V.p.log=[];V.p.logerr=true;sched()});
  else{V.p.log=lsLogGet(V.p.k);render(true)}}
 function render(keep){
  if((V.v==="dash"||V.v==="detail")&&!S.guru)V={v:"gate",p:{}};
@@ -324,18 +336,66 @@ function hud(){const h=$("#hud");
  else h.innerHTML=""}
 function keluar(){if(S.role==="siswa"&&!allDone()&&!confirm("Keluar sekarang? Progresmu tersimpan. Masuk lagi dengan nama dan kode kelas yang sama untuk melanjutkan."))return;
  if(S.role==="siswa"){save("keluar","Keluar dari aplikasi");DB.flush()}
- DB.stop();DB.stopLog();if(DB.fb&&S.guru)DB.fb.auth.signOut().catch(()=>{});
+ DB.stop();DB.stopLog();if(DB.sb&&S.guru)DB.sb.auth.signOut().catch(()=>{});
  DB.uid=null;DB.id=null;DB.q={};DB.lq=[];FEED=[];PREV={};
  S={role:null,guru:false,nama:"",kode:"",ans:{},tmp:{},fail:0,until:0,pop:false,sm:false,fin:false};go("gate")}
 
 /* ===== TAMPILAN ===== */
-const rulesText=()=>"rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n\n    function guru() {\n      return request.auth != null\n        && request.auth.token.email == '"+CFG.guruEmail+"';\n    }\n    function pemilik(id) {\n      return request.auth != null\n        && request.auth.token.firebase.sign_in_provider == 'anonymous'\n        && id.matches(request.auth.uid + '_.*');\n    }\n    function valid() {\n      let d = request.resource.data;\n      return d.keys().hasOnly(['nama','kode','uid','skor','maks','nilai','benar','salah','jawab','prog','status','sm','hal','aksi','pos','det','tm','mulai','selesai','last'])\n        && d.nama is string && d.nama.size() >= 2 && d.nama.size() <= 30\n        && d.kode is string && d.kode.size() >= 2 && d.kode.size() <= 12\n        && d.uid == request.auth.uid\n        && d.nilai is number && d.nilai >= 0 && d.nilai <= 100\n        && d.prog is number && d.prog >= 0 && d.prog <= 100\n        && d.status in ['Belum mulai','Sedang mengerjakan','Selesai']\n        && d.det is map && d.det.size() <= 20;\n    }\n\n    match /siswa/{id} {\n      allow read: if guru() || pemilik(id);\n      allow create, update: if pemilik(id) && valid();\n      allow delete: if guru();\n\n      match /log/{lid} {\n        allow read, delete: if guru();\n        allow create: if pemilik(id)\n          && request.resource.data.keys().hasOnly(['t','tipe','teks'])\n          && request.resource.data.tipe is string\n          && request.resource.data.tipe.size() <= 12\n          && request.resource.data.teks is string\n          && request.resource.data.teks.size() <= 200;\n      }\n    }\n  }\n}\n";
-function copyRules(){const t=rulesText();try{navigator.clipboard.writeText(t).then(()=>alert("Aturan sudah disalin."),()=>alert("Gagal menyalin. Blok teks lalu salin manual."))}catch(e){alert("Gagal menyalin. Blok teks lalu salin manual.")}}
-function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.fb?"Firebase (pemantauan real-time aktif)":"Penyimpanan lokal (tanpa real-time)")+'.</b> '+(DB.fb?"":"Nilai hanya tersimpan di browser perangkat ini, jadi guru tidak bisa memantau siswa yang memakai HP lain. Sandi mode lokal: kelas4telkom (hanya pagar ringan karena kodenya bisa dibaca). Aktifkan Firebase dengan langkah berikut.")+'</p><ol><li>Buka console.firebase.google.com, buat proyek baru (Analytics boleh dimatikan).</li><li>Project settings (ikon roda gigi), bagian Your apps, pilih ikon web &lt;/&gt;, daftarkan aplikasi, lalu salin apiKey, authDomain, projectId, dan appId ke <code>CFG.firebase</code> di bagian atas script file index.html.</li><li>Build, Authentication, Sign-in method: aktifkan <b>Anonymous</b> dan <b>Email/Password</b>.</li><li>Authentication, Users, Add user: email <b>'+esc(CFG.guruEmail)+'</b>, sandi sesuai keinginan guru (siswa tidak perlu tahu email ini).</li><li>Authentication, Settings, Authorized domains: tambahkan domain situs ini (contoh: namaakun.github.io).</li><li>Build, Firestore Database, Create database (lokasi asia-southeast2 Jakarta). Buka tab Rules, tempel aturan berikut, lalu Publish.</li></ol><pre>'+esc(rulesText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin aturan</button></p><p class="meta">Dengan aturan ini siswa hanya bisa menulis datanya sendiri, tidak bisa membaca atau mengubah data siswa lain, dan hanya akun guru yang bisa membaca seluruh data.</p></details>'}
+const rulesText=()=>{const guru=CFG.guruEmail||"guru@domain-anda.com";return `-- Jalankan SQL ini di Supabase > SQL Editor.
+-- Ganti email guru di CFG.guruEmail sebelum menjalankan SQL ini.
+-- Aktifkan Anonymous Sign-ins dan buat akun guru pada Authentication > Users.
+
+create table if not exists public.siswa (
+ id text primary key, nama text not null, kode text not null, uid uuid not null,
+ skor numeric default 0, maks numeric default 100, nilai numeric default 0,
+ benar integer default 0, salah integer default 0, jawab integer default 0,
+ prog numeric default 0, status text default 'Belum mulai', sm boolean default false,
+ hal text, aksi text, pos jsonb default '{}'::jsonb, det jsonb default '{}'::jsonb,
+ tm jsonb default '{}'::jsonb, mulai timestamptz, selesai timestamptz,
+ last timestamptz default now()
+);
+create table if not exists public.log (
+ id bigint generated by default as identity primary key,
+ siswa_id text not null references public.siswa(id) on delete cascade,
+ t timestamptz default now(), tipe text, teks text
+);
+alter table public.siswa enable row level security;
+alter table public.log enable row level security;
+
+drop policy if exists "siswa_read_self_or_teacher" on public.siswa;
+create policy "siswa_read_self_or_teacher" on public.siswa for select to authenticated
+using (uid = auth.uid() or auth.jwt()->>'email' = '${guru}');
+drop policy if exists "siswa_insert_self" on public.siswa;
+create policy "siswa_insert_self" on public.siswa for insert to authenticated
+with check (uid = auth.uid() and id like auth.uid()::text || '\\_%' escape '\\');
+drop policy if exists "siswa_update_self" on public.siswa;
+create policy "siswa_update_self" on public.siswa for update to authenticated
+using (uid = auth.uid() and id like auth.uid()::text || '\\_%' escape '\\')
+with check (uid = auth.uid() and id like auth.uid()::text || '\\_%' escape '\\');
+drop policy if exists "teacher_delete_siswa" on public.siswa;
+create policy "teacher_delete_siswa" on public.siswa for delete to authenticated
+using (auth.jwt()->>'email' = '${guru}');
+drop policy if exists "log_insert_owner" on public.log;
+create policy "log_insert_owner" on public.log for insert to authenticated
+with check (exists(select 1 from public.siswa s where s.id=siswa_id and s.uid=auth.uid()));
+drop policy if exists "log_read_teacher" on public.log;
+create policy "log_read_teacher" on public.log for select to authenticated
+using (auth.jwt()->>'email' = '${guru}');
+drop policy if exists "log_delete_teacher" on public.log;
+create policy "log_delete_teacher" on public.log for delete to authenticated
+using (auth.jwt()->>'email' = '${guru}');
+
+-- Hak akses API untuk pengguna yang sudah login
+grant select, insert, update, delete on public.siswa to authenticated;
+grant select, insert, delete on public.log to authenticated;
+-- Tambahkan tabel siswa dan log ke Database > Publications > supabase_realtime.
+`};
+function copyRules(){const t=rulesText();try{navigator.clipboard.writeText(t).then(()=>alert("SQL Supabase sudah disalin."),()=>alert("Gagal menyalin. Blok teks lalu salin manual."))}catch(e){alert("Gagal menyalin. Blok teks lalu salin manual.")}}
+function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.sb?"Supabase (pemantauan real-time aktif)":"Penyimpanan lokal sementara")+'.</b></p><ol><li>Buka Supabase → Authentication → Providers, aktifkan <b>Anonymous Sign-ins</b>.</li><li>Pada Authentication → Users, buat akun email dan sandi khusus guru.</li><li>Buka SQL Editor, tempel SQL di bawah, lalu tekan Run.</li><li>Buka Database → Publications → supabase_realtime, tambahkan tabel <b>siswa</b> dan <b>log</b>.</li><li>Isi email akun guru pada <code>CFG.guruEmail</code> di konfigurasi HTML.</li></ol><pre>'+esc(rulesText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin SQL Supabase</button></p><p class="meta">Penting: contoh kebijakan guru di atas menganggap setiap akun email terverifikasi sebagai guru. Batasi akses akun guru dan perketat kebijakan ini sebelum website dipublikasikan secara luas.</p></details>'}
 const VIEWS={
  gate:()=>gateHTML(),
  siswa:()=>'<div class="card"><h2>Masuk sebagai Siswa 🎒</h2>'+bub("senang","Tulis namamu dan kode kelasmu dari Bapak atau Ibu Guru, ya! Pakai nama dan kode yang sama setiap kali masuk, supaya kamu lanjut dari terakhir.")+'<label for="nm">Nama</label><input id="nm" maxlength="30" autocomplete="off" placeholder="Tulis namamu"><label for="kd">Kode kelas</label><input id="kd" maxlength="12" autocomplete="off" placeholder="Contoh: IVA"><div id="er" class="fb bad" hidden></div><p><button class="btn go" onclick="mulai()">Mulai Petualangan ▶</button><button class="btn ghost" onclick="go(\'gate\')">◀ Kembali</button></p></div>',
- guru:()=>'<div class="card"><h2>Login Guru 🧑‍🏫</h2><p class="meta">Halaman ini hanya untuk guru. Siswa tidak dapat membuka dashboard nilai.</p>'+(DB.fb&&!CFG.guruEmail?'<label for="em">Email guru</label><input id="em" type="email" autocomplete="username">':'')+'<label for="pw">Sandi guru</label><input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')masuk()"><div id="er" class="fb bad" hidden></div><p><button class="btn go" onclick="masuk()">Masuk</button><button class="btn ghost" onclick="go(\'gate\')">◀ Kembali</button></p>'+guide()+'</div>',
+ guru:()=>'<div class="card"><h2>Login Guru 🧑‍🏫</h2><p class="meta">Halaman ini hanya untuk guru. Siswa tidak dapat membuka dashboard nilai.</p>'+(DB.sb&&!CFG.guruEmail?'<label for="em">Email guru</label><input id="em" type="email" autocomplete="username">':'')+'<label for="pw">Sandi guru</label><input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')masuk()"><div id="er" class="fb bad" hidden></div><p><button class="btn go" onclick="masuk()">Masuk</button><button class="btn ghost" onclick="go(\'gate\')">◀ Kembali</button></p>'+guide()+'</div>',
  peta:()=>{const cur=[1,2,3].find(l=>!lvDone(l)),pos=[[25,82],[72,60],[28,36],[70,14]],tp=allDone()?3:cur-1,jx=pos[tp][0];
   const nodes=[1,2,3].map(l=>{const [x,y]=pos[l-1],k=lvDone(l)?"dn":lvOpen(l)?"":"lk";return '<button class="node '+k+'" style="left:'+x+'%;top:'+y+'%" '+(lvOpen(l)?"":"disabled")+' onclick="go(\'materi\',{l:'+l+',i:0})" aria-label="Level '+l+' '+L[l-1].nm+'">'+L[l-1].ic+'</button><div class="nl" style="left:'+x+'%;top:calc('+y+'% + 42px)">Level '+l+' '+"⭐".repeat(lvStars(l))+"☆".repeat(3-lvStars(l)).replace(/☆/g,"")+'</div>'}).join("");
   const tr='<button class="node '+(allDone()?"":"lk")+'" style="left:'+pos[3][0]+'%;top:'+pos[3][1]+'%" '+(allDone()?"":"disabled")+' onclick="go(\'hasil\')" aria-label="Lihat rapor">🏆</button><div class="nl" style="left:'+pos[3][0]+'%;top:calc('+pos[3][1]+'% + 42px)">Rapor</div>';
@@ -364,12 +424,12 @@ const VIEWS={
    dn=A.filter(r=>stt(r)==="Selesai"),av=dn.length?Math.round(dn.reduce((s,r)=>s+(r.nilai||0),0)/dn.length*10)/10:0,pc=n=>A.length?n/A.length*100:0;
   const an=Q.map(q=>{const ans=A.map(r=>detOf(r,q.id)).filter(Boolean),ok=ans.filter(d=>d.p===q.w).length;return{q,n:ans.length,ok,pr:ans.length?Math.round(ok/ans.length*100):0}});
   const rows=D.length?D.map((r,k)=>'<tr><td>'+(k+1)+'</td><td><span class="dot '+(online(r)?"on":"")+'" title="'+(online(r)?"Sedang online":"Tidak aktif")+'"></span><b>'+esc(r.nama)+'</b></td><td>'+esc(r.kode)+'</td><td>'+bd(r)+'</td><td><small>'+esc(r.hal||"-")+'</small></td><td><div class="pb2"><i style="width:'+(r.prog||0)+'%"></i></div>'+(r.prog||0)+'%</td><td><b>'+fm(r.nilai||0)+'</b><br><small>'+fm(r.skor||0)+'/'+(r.maks||0)+'</small></td><td>'+(r.benar||0)+' / '+(r.salah||0)+'</td><td>'+clk(tms(r.mulai))+'</td><td>'+(tms(r.selesai)?clk(tms(r.selesai)):"-")+'</td><td><small>'+ago(tms(r.last))+'</small></td><td><button class="btn ghost" style="min-height:36px;padding:4px 10px;margin:0" onclick="go(\'detail\',{k:\''+esc(r.k)+'\'})">Lihat</button></td></tr>').join(""):'<tr><td colspan="12">Belum ada siswa yang bergabung.</td></tr>';
-  return'<div class="card"><h2>Dashboard Guru 📊</h2>'+(V.p.err?'<div class="fb bad">'+V.p.err+'</div>':'')+'<p class="meta">'+(DB.fb?"🟢 Terhubung ke Firebase. Data siswa masuk otomatis tanpa perlu menyegarkan halaman.":"Mode lokal: hanya menampilkan siswa yang memakai perangkat ini.")+'</p>'
+  return'<div class="card"><h2>Dashboard Guru 📊</h2>'+(V.p.err?'<div class="fb bad">'+V.p.err+'</div>':'')+'<p class="meta">'+(DB.sb?"🟢 Terhubung ke Supabase. Data siswa masuk otomatis tanpa perlu menyegarkan halaman.":"Mode lokal: hanya menampilkan siswa yang memakai perangkat ini.")+'</p>'
   +'<div class="grid"><div class="tile"><b>'+A.length+'</b> siswa bergabung</div><div class="tile"><span class="dot on"></span><b>'+on+'</b> sedang online</div><div class="tile"><b>'+c0+'</b> belum mulai</div><div class="tile"><b>'+c1+'</b> sedang mengerjakan</div><div class="tile"><b>'+c2+'</b> selesai</div><div class="tile">Rata-rata nilai: <b>'+fm(av)+'</b></div></div>'
   +'<div class="sbar" role="img" aria-label="Belum mulai '+c0+', sedang mengerjakan '+c1+', selesai '+c2+'"><i style="width:'+pc(c0)+'%;background:#9ca3af"></i><i style="width:'+pc(c1)+'%;background:#f5b82e"></i><i style="width:'+pc(c2)+'%;background:#2e9e48"></i></div><p class="meta">⚪ Belum mulai | 🟡 Sedang mengerjakan | 🟢 Selesai</p>'
-  +(DB.fb?'<h3>Aktivitas terbaru</h3><div class="feed">'+(FEED.length?FEED.map(x=>'<div><span class="meta">'+clk(x.t)+'</span> '+esc(x.txt)+'</div>').join(""):'<div class="meta">Menunggu aktivitas siswa...</div>')+'</div>':'')
+  +(DB.sb?'<h3>Aktivitas terbaru</h3><div class="feed">'+(FEED.length?FEED.map(x=>'<div><span class="meta">'+clk(x.t)+'</span> '+esc(x.txt)+'</div>').join(""):'<div class="meta">Menunggu aktivitas siswa...</div>')+'</div>':'')
   +'<label for="fk">Kelas</label><select id="fk" onchange="V.p.f=this.value;render(1)"><option value="">Semua kelas</option>'+ks.map(k=>'<option '+(k===f?"selected":"")+' value="'+esc(k)+'">'+esc(k)+'</option>').join("")+'</select><label for="fs">Status</label><select id="fs" onchange="V.p.s=this.value;render(1)"><option value="">Semua status</option>'+["Belum mulai","Sedang mengerjakan","Selesai"].map(s=>'<option '+(s===sf?"selected":"")+'>'+s+'</option>').join("")+'</select>'
-  +'<p>'+(DB.fb?"":'<button class="btn go" onclick="V.p.rows=null;render(1)">🔄 Segarkan</button>')+'<button class="btn warn" onclick="csv()">⬇️ CSV Rekap</button><button class="btn warn" onclick="csvJawab()">⬇️ CSV Jawaban</button>'+(DB.fb?"":'<button class="btn ghost" onclick="gantiSandi()">🔑 Ganti sandi</button>')+'<button class="btn red" onclick="hapusSemua()">🗑️ Hapus semua</button><button class="btn ghost" onclick="keluar()">Keluar</button></p>'
+  +'<p>'+(DB.sb?"":'<button class="btn go" onclick="V.p.rows=null;render(1)">🔄 Segarkan</button>')+'<button class="btn warn" onclick="csv()">⬇️ CSV Rekap</button><button class="btn warn" onclick="csvJawab()">⬇️ CSV Jawaban</button>'+(DB.sb?"":'<button class="btn ghost" onclick="gantiSandi()">🔑 Ganti sandi</button>')+'<button class="btn red" onclick="hapusSemua()">🗑️ Hapus semua</button><button class="btn ghost" onclick="keluar()">Keluar</button></p>'
   +'<div class="wrap"><table><tr><th>No</th><th>Nama</th><th>Kelas</th><th>Status</th><th>Sedang di</th><th>Progres</th><th>Nilai</th><th>Benar / Salah</th><th>Mulai</th><th>Selesai</th><th>Aktif</th><th>Detail</th></tr>'+rows+'</table></div>'
   +'<p class="meta">Titik hijau berarti siswa aktif dalam 2 menit terakhir. Benar dihitung jika soal dijawab dengan poin penuh. CSV dapat dibuka dengan Excel.</p>'
   +'<h3>Analisis per soal</h3><div class="grid">'+an.map(x=>'<div class="tile"><b>Soal '+x.q.id+'</b> <small>(Level '+x.q.lv+')</small><br><small>'+esc(x.q.q)+'</small><div class="pb2"><i style="width:'+x.pr+'%"></i></div><small>'+x.ok+' dari '+x.n+' siswa benar penuh'+(x.n?" ("+x.pr+"%)":"")+'</small></div>').join("")+'</div></div>'},
@@ -391,9 +451,9 @@ async function mulai(){if(joining)return;const n=$("#nm").value.trim().replace(/
  joining=true;const bt=document.querySelector('button[onclick="mulai()"]');if(bt){bt.disabled=true;bt.textContent="Menghubungkan..."}
  S={role:"siswa",guru:false,nama:n,kode:k,ans:{},tmp:{},fail:0,until:0,pop:false,sm:false,fin:false,isNew:true};
  DB.q={};DB.lq=[];DB.id=null;let cloud=null;
- if(DB.fb){
+ if(DB.sb){
   try{DB.uid=await DB.anon();DB.id=DB.uid+"_"+keyOf()}catch(e){DB.uid=null;DB.id=null;alert("Koneksi ke server belum aktif. Nilaimu tersimpan di perangkat ini dulu.")}
-  if(DB.id){try{cloud=await DB.getOwn()}catch(e){if(e&&e.code==="permission-denied"){DB.id=null;alert("Aturan database (Rules) belum benar, jadi nilaimu hanya tersimpan di perangkat ini. Beri tahu gurumu.")}}}}
+  if(DB.id){try{cloud=await DB.getOwn()}catch(e){if(e&&e.code==="permission-denied"){DB.id=null;alert("Pengaturan akses Supabase (RLS) belum benar. Beri tahu gurumu.")}}}}
  const k0=keyOf(),ses=loadSes(k0),cans=cloud&&cloud.det?ansFrom(cloud.det):{},lans=ses&&ses.ans?ses.ans:{},nl=Object.keys(lans).length,nc=Object.keys(cans).length;
  let pos=null,back=false;
  if(nl&&nl>=nc){S.ans=lans;S.tmp=ses.tmp||{};pos=ses.pos;back=true}
@@ -408,18 +468,18 @@ async function mulai(){if(joining)return;const n=$("#nm").value.trim().replace(/
 function ulang(){S.ans={};S.tmp={};S.fin=false;save("ulang","Mengulang pembelajaran dari awal",{det:DB.clr(),tm:DB.clr(),selesai:DB.del()});go("peta")}
 async function masuk(){if(Date.now()<S.until)return err("Terlalu banyak percobaan. Tunggu 30 detik.");
  const pw=$("#pw").value;let ok=false,msg="Sandi salah.";
- try{if(DB.fb){const em=CFG.guruEmail||$("#em").value.trim();await DB.fb.auth.signInWithEmailAndPassword(em,pw);ok=true}
+ try{if(DB.sb){const em=CFG.guruEmail||($("#em")?$("#em").value.trim():"");if(!em)return err("Masukkan email guru.");const {error}=await DB.sb.auth.signInWithPassword({email:em,password:pw});if(error)throw error;ok=true}
   else{let s=null;try{s=localStorage.getItem("kp_pw")}catch(e){}ok=h53("kp:"+pw)===(s||CFG.teacherHash)}}
  catch(e){ok=false;const c=e&&e.code;
   if(c==="auth/network-request-failed")return err("Tidak ada koneksi internet. Coba lagi.");
   if(c==="auth/too-many-requests")return err("Terlalu banyak percobaan. Tunggu beberapa menit.");
-  if(c==="auth/operation-not-allowed")return err("Login Email/Password belum diaktifkan di Firebase.");
-  msg="Sandi salah, atau akun guru belum dibuat di Firebase."}
+  if(c==="auth/operation-not-allowed")return err("Login Email/Password belum diaktifkan di Supabase.");
+  msg="Sandi salah, atau akun guru belum dibuat di Supabase."}
  if(!ok){if(++S.fail>=5){S.until=Date.now()+30000;S.fail=0}return err(msg)}
  S.role="guru";S.guru=true;go("dash")}
 function gantiSandi(){const p=prompt("Sandi baru (minimal 6 karakter):");if(!p)return;if(p.length<6)return alert("Sandi terlalu pendek.");try{localStorage.setItem("kp_pw",h53("kp:"+p));alert("Sandi diganti. Catatan: sandi ini hanya berlaku di browser ini.")}catch(e){alert("Gagal menyimpan sandi.")}}
-function hapusSemua(){if(confirm("Hapus SEMUA data siswa? Tindakan ini tidak dapat dibatalkan."))DB.clear().then(()=>{ROWS=[];FEED=[];PREV={};V.p.rows=DB.fb?ROWS:null;render(1)}).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Firebase."))}
-function hapusSiswa(k){if(confirm("Hapus data siswa ini? Tindakan ini tidak dapat dibatalkan."))DB.del1(k).then(()=>go("dash")).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Firebase."))}
+function hapusSemua(){if(confirm("Hapus SEMUA data siswa? Tindakan ini tidak dapat dibatalkan."))DB.clear().then(()=>{ROWS=[];FEED=[];PREV={};V.p.rows=DB.sb?ROWS:null;render(1)}).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Supabase."))}
+function hapusSiswa(k){if(confirm("Hapus data siswa ini? Tindakan ini tidak dapat dibatalkan."))DB.del1(k).then(()=>go("dash")).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Supabase."))}
 function dl(name,head,rows){const q=v=>{v=String(v==null?"":v);if(/^[=+\-@]/.test(v))v="'"+v;return'"'+v.replace(/"/g,'""')+'"'};
  const b=new Blob(["\ufeff"+[head.map(q).join(",")].concat(rows.map(r=>r.map(q).join(","))).join("\n")],{type:"text/csv"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 const fsel=()=>{const f=V.p.f||"";return(V.p.rows||[]).filter(r=>!f||r.kode===f)};
@@ -528,9 +588,9 @@ document.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" ")firstTap
 document.addEventListener("visibilitychange",()=>{if(document.hidden){MUS.wasOn=MUS.on;if(MUS.on)MUS.stop()}else if(MUS.wasOn){MUS.wasOn=false;MUS.start()}});
 window.addEventListener("blur",()=>setTimeout(()=>{const a=document.activeElement;if(a&&a.tagName==="IFRAME"&&MUS.on)MUS.stop()},0));
 
-setInterval(()=>{if(S.role==="siswa"&&DB.fb&&DB.id&&!document.hidden){DB.hb=true;if(!DB.tm)DB.tm=setTimeout(()=>DB.flush(),300)}},45000);
-setInterval(()=>{if(S.guru&&(V.v==="dash"||V.v==="detail")){if(!DB.fb&&V.v==="dash")V.p.rows=null;render(true)}},15000);
-document.addEventListener("visibilitychange",()=>{if(S.role==="siswa"&&DB.fb&&DB.id){if(!document.hidden)DB.hb=true;DB.flush()}});
+setInterval(()=>{if(S.role==="siswa"&&DB.sb&&DB.id&&!document.hidden){DB.hb=true;if(!DB.tm)DB.tm=setTimeout(()=>DB.flush(),300)}},45000);
+setInterval(()=>{if(S.guru&&(V.v==="dash"||V.v==="detail")){if(!DB.sb&&V.v==="dash")V.p.rows=null;render(true)}},15000);
+document.addEventListener("visibilitychange",()=>{if(S.role==="siswa"&&DB.sb&&DB.id){if(!document.hidden)DB.hb=true;DB.flush()}});
 window.addEventListener("pagehide",()=>{if(S.role==="siswa")DB.flush()});
 DB.init().then(()=>render());
 </script>
