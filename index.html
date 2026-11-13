@@ -126,7 +126,7 @@ details pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:
 const CFG={
  supabaseUrl:"https://nacfywrzpkvqioyhauuo.supabase.co",
  supabaseKey:"sb_publishable_wJ51yRbbtCe_a-DlUEkXRg_oQWS4dwr",
- guruEmail:""
+ guruEmail:"muhmaftuhdzaki378@gmail.com"
 };
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -310,7 +310,7 @@ let rt=null,FEED=[],PREV={};
 function sched(){if(rt)return;rt=setTimeout(()=>{rt=null;if(V.v==="dash"||V.v==="detail")render(true)},350)}
 function feed(ch){ch.forEach(c=>{const r=c.r;if(c.t==="added")FEED.unshift({t:Date.now(),txt:r.nama+" ("+r.kode+") bergabung"});else if(c.t==="modified"&&r.aksi&&r.aksi!==PREV[r.k])FEED.unshift({t:Date.now(),txt:r.nama+": "+r.aksi})});FEED=FEED.slice(0,15);PREV={};ROWS.forEach(r=>PREV[r.k]=r.aksi)}
 function loadRows(){
- const bad=()=>{DB.stop();V.p.rows=[];V.p.err="Data tidak dapat dimuat. Periksa koneksi internet, akun guru, dan aturan (Rules) Supabase.";render(true)};
+ const bad=(e)=>{DB.stop();V.p.rows=[];console.error("Gagal memuat dashboard Supabase:",e);V.p.err="Gagal memuat data Supabase: "+(e&&e.message?e.message:"Periksa koneksi, tabel, dan kebijakan RLS.");render(true)};
  if(DB.sb){if(DB.un){V.p.rows=ROWS;render(true);return}
   DB.watch((r,ch)=>{ROWS=r;feed(ch);if(V.v==="dash"){V.p.rows=r;V.p.err=""}sched()},bad)}
  else DB.list().then(r=>{ROWS=r;V.p.rows=r;render(true)}).catch(bad)}
@@ -341,7 +341,7 @@ function keluar(){if(S.role==="siswa"&&!allDone()&&!confirm("Keluar sekarang? Pr
  S={role:null,guru:false,nama:"",kode:"",ans:{},tmp:{},fail:0,until:0,pop:false,sm:false,fin:false};go("gate")}
 
 /* ===== TAMPILAN ===== */
-const rulesText=()=>{const guru=CFG.guruEmail||"guru@domain-anda.com";return `-- Jalankan SQL ini di Supabase > SQL Editor.
+const rulesText=()=>{const guru=CFG.guruEmail||"muhmaftuhdzaki378@gmail.com";return `-- Jalankan SQL ini di Supabase > SQL Editor.
 -- Ganti email guru di CFG.guruEmail sebelum menjalankan SQL ini.
 -- Aktifkan Anonymous Sign-ins dan buat akun guru pada Authentication > Users.
 
@@ -385,13 +385,36 @@ drop policy if exists "log_delete_teacher" on public.log;
 create policy "log_delete_teacher" on public.log for delete to authenticated
 using (auth.jwt()->>'email' = '${guru}');
 
--- Hak akses API untuk pengguna yang sudah login
+-- Pastikan kolom tersedia jika tabel pernah dibuat dengan struktur lama.
+alter table public.siswa add column if not exists nama text;
+alter table public.siswa add column if not exists kode text;
+alter table public.siswa add column if not exists uid uuid;
+alter table public.siswa add column if not exists skor numeric default 0;
+alter table public.siswa add column if not exists maks numeric default 100;
+alter table public.siswa add column if not exists nilai numeric default 0;
+alter table public.siswa add column if not exists benar integer default 0;
+alter table public.siswa add column if not exists salah integer default 0;
+alter table public.siswa add column if not exists jawab integer default 0;
+alter table public.siswa add column if not exists prog numeric default 0;
+alter table public.siswa add column if not exists status text default 'Belum mulai';
+alter table public.siswa add column if not exists sm boolean default false;
+alter table public.siswa add column if not exists hal text;
+alter table public.siswa add column if not exists aksi text;
+alter table public.siswa add column if not exists pos jsonb default '{}'::jsonb;
+alter table public.siswa add column if not exists det jsonb default '{}'::jsonb;
+alter table public.siswa add column if not exists tm jsonb default '{}'::jsonb;
+alter table public.siswa add column if not exists mulai timestamptz;
+alter table public.siswa add column if not exists selesai timestamptz;
+alter table public.siswa add column if not exists last timestamptz default now();
+
+-- Hak akses API untuk pengguna yang sudah login.
 grant select, insert, update, delete on public.siswa to authenticated;
 grant select, insert, delete on public.log to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
 -- Tambahkan tabel siswa dan log ke Database > Publications > supabase_realtime.
 `};
 function copyRules(){const t=rulesText();try{navigator.clipboard.writeText(t).then(()=>alert("SQL Supabase sudah disalin."),()=>alert("Gagal menyalin. Blok teks lalu salin manual."))}catch(e){alert("Gagal menyalin. Blok teks lalu salin manual.")}}
-function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.sb?"Supabase (pemantauan real-time aktif)":"Penyimpanan lokal sementara")+'.</b></p><ol><li>Buka Supabase → Authentication → Providers, aktifkan <b>Anonymous Sign-ins</b>.</li><li>Pada Authentication → Users, buat akun email dan sandi khusus guru.</li><li>Buka SQL Editor, tempel SQL di bawah, lalu tekan Run.</li><li>Buka Database → Publications → supabase_realtime, tambahkan tabel <b>siswa</b> dan <b>log</b>.</li><li>Isi email akun guru pada <code>CFG.guruEmail</code> di konfigurasi HTML.</li></ol><pre>'+esc(rulesText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin SQL Supabase</button></p><p class="meta">Penting: contoh kebijakan guru di atas menganggap setiap akun email terverifikasi sebagai guru. Batasi akses akun guru dan perketat kebijakan ini sebelum website dipublikasikan secara luas.</p></details>'}
+function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.sb?"Supabase (pemantauan real-time aktif)":"Penyimpanan lokal sementara")+'.</b></p><ol><li>Buka Supabase → Authentication → Providers, aktifkan <b>Anonymous Sign-ins</b>.</li><li>Pada Authentication → Users, buat akun email dan sandi khusus guru.</li><li>Buka SQL Editor, tempel SQL di bawah, lalu tekan Run.</li><li>Buka Database → Publications → supabase_realtime, tambahkan tabel <b>siswa</b> dan <b>log</b>.</li><li>Email guru sudah diatur ke <code>muhmaftuhdzaki378@gmail.com</code> pada konfigurasi HTML.</li></ol><pre>'+esc(rulesText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin SQL Supabase</button></p><p class="meta">Penting: contoh kebijakan guru di atas menganggap setiap akun email terverifikasi sebagai guru. Batasi akses akun guru dan perketat kebijakan ini sebelum website dipublikasikan secara luas.</p></details>'}
 const VIEWS={
  gate:()=>gateHTML(),
  siswa:()=>'<div class="card"><h2>Masuk sebagai Siswa 🎒</h2>'+bub("senang","Tulis namamu dan kode kelasmu dari Bapak atau Ibu Guru, ya! Pakai nama dan kode yang sama setiap kali masuk, supaya kamu lanjut dari terakhir.")+'<label for="nm">Nama</label><input id="nm" maxlength="30" autocomplete="off" placeholder="Tulis namamu"><label for="kd">Kode kelas</label><input id="kd" maxlength="12" autocomplete="off" placeholder="Contoh: IVA"><div id="er" class="fb bad" hidden></div><p><button class="btn go" onclick="mulai()">Mulai Petualangan ▶</button><button class="btn ghost" onclick="go(\'gate\')">◀ Kembali</button></p></div>',
@@ -463,6 +486,8 @@ async function mulai(){if(joining)return;const n=$("#nm").value.trim().replace(/
  if(back)S.sm=true;
  S.fin=!!cloud&&allDone();
  save("masuk",back?"Masuk kembali":"Bergabung",S.isNew?{mulai:DB.ts()}:null);
+ // Kirim identitas siswa ke Supabase segera saat tombol Mulai Petualangan ditekan.
+ if(DB.sb && DB.id){ await DB.flush(); }
  joining=false;burst(10);
  const r=back?resumePos({pos}):null;go(...(r||["peta"]));if(back)plus("Selamat datang kembali! 👋")}
 function ulang(){S.ans={};S.tmp={};S.fin=false;save("ulang","Mengulang pembelajaran dari awal",{det:DB.clr(),tm:DB.clr(),selesai:DB.del()});go("peta")}
