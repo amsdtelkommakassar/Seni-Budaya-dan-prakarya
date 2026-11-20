@@ -124,17 +124,18 @@ details pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:
 "use strict";
 /* ==========================================================================
    KONFIGURASI
-   1) Tanpa Firebase (bawaan): data hanya tersimpan di browser perangkat ini.
-      Sandi guru mode lokal awal: kelas4telkom (email boleh dikosongkan).
-      Setelah guru menekan "Ganti email & sandi" di dashboard, login memakai
-      email dan sandi baru tersebut.
-   2) Dengan Firebase (pemantauan real-time dari banyak HP): isi CFG.firebase
-      di bawah dan daftar email guru di CFG.guruEmails. Petunjuk lengkap ada
-      di halaman Login Guru ("Petunjuk teknis").
+   Aplikasi ini terhubung ke SUPABASE (data siswa masuk real-time ke guru).
+   Langkah satu kali (lihat juga "Petunjuk teknis" di halaman Login Guru):
+   1) Dashboard Supabase > SQL Editor: jalankan SQL dari Petunjuk teknis.
+   2) Authentication > Sign In / Providers: aktifkan "Allow anonymous sign-ins".
+   3) Authentication > Users > Add user: buat akun guru (email & sandi).
+   4) Ganti CFG.guruEmails di bawah dengan email guru yang sama.
+   Jika Supabase belum siap/offline, game tetap jalan dengan penyimpanan lokal.
+   Sandi guru mode lokal awal: kelas4telkom (email boleh dikosongkan).
    ========================================================================== */
 const CFG={
- firebase:{apiKey:"",authDomain:"",projectId:"",appId:""},
- guruEmails:["emailguru@gmail.com"], /* daftar email guru yang boleh membaca data (dipakai di Rules Firebase) */
+ supabase:{url:"https://nacfywrzpkvqioyhauuo.supabase.co",key:"sb_publishable_wJ51yRbbtCe_a-DlUEkXRg_oQWS4dwr"},
+ guruEmails:["emailguru@gmail.com"], /* GANTI dengan email guru yang dibuat di Supabase Auth */
  teacherHash:"1x0a7pvwyqj"
 };
 const $=s=>document.querySelector(s);
@@ -159,37 +160,52 @@ const online=r=>Date.now()-tms(r.last)<120000;
 const bd=r=>{const s=stt(r);return'<span class="bd '+(s==="Selesai"?"b2":s==="Belum mulai"?"b0":"b1")+'">'+s+'</span>'};
 const detOf=(r,id)=>{const d=r.det&&r.det[id];return d===undefined||d===null?null:(typeof d==="object"?d:{p:d,j:"",t:0,s:-1})};
 
-const DB={fb:null,note:"",uid:null,id:null,un:null,unLog:null,q:{},lq:[],tm:null,hb:false,warned:false,
- async init(){if(!CFG.firebase.apiKey)return;try{for(const f of["app","auth","firestore"])await new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://www.gstatic.com/firebasejs/10.12.2/firebase-"+f+"-compat.js";s.onload=ok;s.onerror=no;document.head.appendChild(s)});firebase.initializeApp(CFG.firebase);const db=firebase.firestore();try{await db.enablePersistence({synchronizeTabs:true})}catch(e){}DB.fb={auth:firebase.auth(),db}}catch(e){DB.fb=null;DB.note="Firebase gagal dimuat, jadi game memakai penyimpanan lokal."}},
- ts(){return DB.fb?firebase.firestore.FieldValue.serverTimestamp():Date.now()},
- del(){return DB.fb?firebase.firestore.FieldValue.delete():null},
- clr(){if(!DB.fb)return{};const o={};Q.forEach(q=>o[q.id]=DB.del());return o},
- async anon(){const a=DB.fb.auth;const run=async()=>{await new Promise(r=>{const u=a.onAuthStateChanged(()=>{u();r()})});if(!a.currentUser||!a.currentUser.isAnonymous)await a.signInAnonymously();return a.currentUser.uid};return Promise.race([run(),new Promise((_,no)=>setTimeout(()=>no(new Error("timeout")),9000))])},
- ref(id){return DB.fb.db.collection("siswa").doc(id)},
- async getOwn(){const s=await DB.ref(DB.id).get();return s.exists?s.data():null},
+/* ===== DATABASE: SUPABASE ===== */
+const DEL={__del:1};
+function mergeD(o,f){const r=Object.assign({},o);for(const k in f){const v=f[k];if(v===DEL)delete r[k];else if((k==="det"||k==="tm")&&v&&typeof v==="object"){const b=Object.assign({},r[k]||{});for(const s in v){if(v[s]===DEL)delete b[s];else b[s]=v[s]}r[k]=b}else r[k]=v}return r}
+const DB={fb:null,note:"",uid:null,id:null,un:null,unLog:null,q:{},lq:[],tm:null,hb:false,warned:false,own:{},chain:Promise.resolve(),
+ async init(){if(!CFG.supabase.url||!CFG.supabase.key)return;try{await new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";s.onload=ok;s.onerror=no;document.head.appendChild(s)});DB.fb=window.supabase.createClient(CFG.supabase.url,CFG.supabase.key,{auth:{persistSession:true,autoRefreshToken:true}})}catch(e){DB.fb=null;DB.note="Supabase gagal dimuat, jadi game memakai penyimpanan lokal."}},
+ ts(){return Date.now()},
+ del(){return DB.fb?DEL:null},
+ clr(){if(!DB.fb)return{};const o={};Q.forEach(q=>o[q.id]=DEL);return o},
+ async anon(){const a=DB.fb.auth;const run=async()=>{const g=await a.getSession(),u=g&&g.data&&g.data.session&&g.data.session.user;if(u&&u.is_anonymous)return u.id;const r=await a.signInAnonymously();if(r.error)throw r.error;return r.data.user.id};return Promise.race([run(),new Promise((_,no)=>setTimeout(()=>no(new Error("timeout")),9000))])},
+ async getOwn(){const r=await DB.fb.from("siswa").select("d").eq("id",DB.id).maybeSingle();if(r.error)throw r.error;DB.own=r.data&&r.data.d?r.data.d:{};return r.data?r.data.d:null},
  upd(f,lg){
   if(DB.fb&&DB.id){Object.assign(DB.q,f);if(lg)DB.lq.push(lg);if(!DB.tm)DB.tm=setTimeout(()=>DB.flush(),500);return}
   const k=keyOf(),g=Object.assign({},f,{last:Date.now()});if(g.mulai===undefined&&!(lsGet()[k]||{}).mulai)g.mulai=Date.now();lsMerge(k,g);if(lg)lsLogAdd(k,{t:Date.now(),tipe:lg[0],teks:lg[1]})},
- flush(){clearTimeout(DB.tm);DB.tm=null;if(!DB.fb||!DB.id)return Promise.resolve();
+ flush(){clearTimeout(DB.tm);DB.tm=null;if(!DB.fb||!DB.id)return DB.chain;
   const f=DB.q,l=DB.lq,beat=DB.hb;DB.q={};DB.lq=[];DB.hb=false;
-  if(!Object.keys(f).length&&!l.length&&!beat)return Promise.resolve();
-  const doc=DB.ref(DB.id),b=DB.fb.db.batch(),T=firebase.firestore.FieldValue.serverTimestamp();
-  b.set(doc,Object.assign({},f,{last:T}),{merge:true});
-  l.forEach(x=>b.set(doc.collection("log").doc(),{t:T,tipe:String(x[0]).slice(0,12),teks:String(x[1]).slice(0,190)}));
-  return b.commit().catch(e=>{console.warn("Firestore:",e);if(e&&e.code==="permission-denied"&&!DB.warned){DB.warned=true;alert("Data belum bisa dikirim ke guru karena aturan database (Rules) belum benar. Beri tahu gurumu.")}})},
- watch(cb,no){DB.stop();let first=true;DB.un=DB.fb.db.collection("siswa").onSnapshot(q=>{const o={serverTimestamps:"estimate"},rows=q.docs.map(d=>Object.assign({k:d.id},d.data(o))),ch=first?[]:q.docChanges().map(c=>({t:c.type,r:Object.assign({k:c.doc.id},c.doc.data(o))}));first=false;cb(rows,ch)},no)},
- watchLog(id,ok,no){DB.stopLog();DB.unLog=DB.ref(id).collection("log").orderBy("t","desc").limit(200).onSnapshot(q=>ok(q.docs.map(d=>d.data({serverTimestamps:"estimate"}))),no)},
+  if(!Object.keys(f).length&&!l.length&&!beat)return DB.chain;
+  const id=DB.id,now=Date.now();DB.own=mergeD(DB.own,Object.assign({},f,{last:now}));const d=DB.own;
+  DB.chain=DB.chain.then(async()=>{try{
+   const r=await DB.fb.from("siswa").upsert({id,d,updated_at:new Date().toISOString()});if(r.error)throw r.error;
+   if(l.length){const r2=await DB.fb.from("siswa_log").insert(l.map((x,i)=>({siswa_id:id,t:now+i,tipe:String(x[0]).slice(0,12),teks:String(x[1]).slice(0,190)})));if(r2.error)throw r2.error}
+  }catch(e){console.warn("Supabase:",e);if(!DB.warned){DB.warned=true;alert("Data belum bisa dikirim ke guru karena tabel/aturan database (Supabase) belum benar. Beri tahu gurumu.")}}});
+  return DB.chain},
+ watch(cb,no){DB.stop();const m=new Map();let first=true,tt=null;
+  const rowOf=x=>Object.assign({k:x.id},x.d);
+  const load=async()=>{const r=await DB.fb.from("siswa").select("id,d");if(r.error){no(r.error);return}
+   const ch=[],seen=new Set();
+   r.data.forEach(x=>{seen.add(x.id);const row=rowOf(x),old=m.get(x.id);if(!first){if(!old)ch.push({t:"added",r:row});else if(JSON.stringify(old)!==JSON.stringify(row))ch.push({t:"modified",r:row})}m.set(x.id,row)});
+   [...m.keys()].forEach(k=>{if(!seen.has(k))m.delete(k)});
+   first=false;cb([...m.values()],ch)};
+  const sch=()=>{if(tt)return;tt=setTimeout(()=>{tt=null;load()},400)};
+  load();
+  const iv=setInterval(load,8000);
+  const chn=DB.fb.channel("siswa-live").on("postgres_changes",{event:"*",schema:"public",table:"siswa"},sch).subscribe();
+  DB.un=()=>{clearInterval(iv);clearTimeout(tt);try{DB.fb.removeChannel(chn)}catch(e){}}},
+ watchLog(id,ok,no){DB.stopLog();
+  const load=async()=>{const r=await DB.fb.from("siswa_log").select("t,tipe,teks").eq("siswa_id",id).order("t",{ascending:false}).limit(200);if(r.error)no(r.error);else ok(r.data)};
+  load();const iv=setInterval(load,5000);DB.unLog=()=>clearInterval(iv)},
  stop(){if(DB.un){DB.un();DB.un=null}},
  stopLog(){if(DB.unLog){DB.unLog();DB.unLog=null}},
  async list(){return Object.values(lsGet())},
  async del1(id){
   if(!DB.fb){try{const o=lsGet();delete o[id];localStorage.setItem("sbdp_hasil",JSON.stringify(o));const g=JSON.parse(localStorage.getItem("sbdp_log")||"{}");delete g[id];localStorage.setItem("sbdp_log",JSON.stringify(g))}catch(e){}return}
-  const d=DB.ref(id),l=await d.collection("log").get();let b=DB.fb.db.batch(),n=0;
-  for(const x of l.docs){b.delete(x.ref);if(++n>=400){await b.commit();b=DB.fb.db.batch();n=0}}
-  b.delete(d);await b.commit()},
+  const r=await DB.fb.from("siswa").delete().eq("id",id);if(r.error)throw r.error},
  async clear(){
   if(!DB.fb){try{localStorage.removeItem("sbdp_hasil");localStorage.removeItem("sbdp_log");localStorage.removeItem("sbdp_sesi")}catch(e){}return}
-  const s=await DB.fb.db.collection("siswa").get();for(const d of s.docs)await DB.del1(d.id)}
+  const r=await DB.fb.from("siswa").delete().neq("id","");if(r.error)throw r.error}
 };
 
 /* ===== KARAKTER: BANGJACK (satu-satunya karakter) ===== */
@@ -301,7 +317,7 @@ let rt=null,FEED=[],PREV={};
 function sched(){if(rt)return;rt=setTimeout(()=>{rt=null;if(V.v==="dash"||V.v==="detail")render(true)},350)}
 function feed(ch){ch.forEach(c=>{const r=c.r;if(c.t==="added")FEED.unshift({t:Date.now(),txt:r.nama+" ("+r.kode+") bergabung"});else if(c.t==="modified"&&r.aksi&&r.aksi!==PREV[r.k])FEED.unshift({t:Date.now(),txt:r.nama+": "+r.aksi})});FEED=FEED.slice(0,15);PREV={};ROWS.forEach(r=>PREV[r.k]=r.aksi)}
 function loadRows(){
- const bad=()=>{DB.stop();V.p.rows=[];V.p.err="Data tidak dapat dimuat. Periksa koneksi internet, akun guru, dan aturan (Rules) Firestore.";render(true)};
+ const bad=()=>{DB.stop();V.p.rows=[];V.p.err="Data tidak dapat dimuat. Periksa koneksi internet, akun guru, dan tabel/aturan (RLS) Supabase.";render(true)};
  if(DB.fb){if(DB.un){V.p.rows=ROWS;render(true);return}
   DB.watch((r,ch)=>{ROWS=r;feed(ch);if(V.v==="dash"){V.p.rows=r;V.p.err=""}sched()},bad)}
  else DB.list().then(r=>{ROWS=r;V.p.rows=r;render(true)}).catch(bad)}
@@ -327,15 +343,73 @@ function hud(){const h=$("#hud");
  else h.innerHTML=""}
 function keluar(){if(S.role==="siswa"&&!allDone()&&!confirm("Keluar sekarang? Progresmu tersimpan. Masuk lagi dengan nama dan kode kelas yang sama untuk melanjutkan."))return;
  if(S.role==="siswa"){save("keluar","Keluar dari aplikasi");DB.flush()}
- DB.stop();DB.stopLog();if(DB.fb&&S.guru)DB.fb.auth.signOut().catch(()=>{});
- DB.uid=null;DB.id=null;DB.q={};DB.lq=[];FEED=[];PREV={};
+ DB.stop();DB.stopLog();if(DB.fb&&S.guru){try{DB.fb.auth.signOut().catch(()=>{})}catch(e){}}
+ DB.uid=null;DB.id=null;DB.q={};DB.lq=[];DB.own={};FEED=[];PREV={};
  S={role:null,guru:false,nama:"",kode:"",ans:{},tmp:{},fail:0,until:0,pop:false,sm:false,fin:false};go("gate")}
 
 /* ===== TAMPILAN ===== */
 const guruList=()=>CFG.guruEmails.map(e=>String(e).trim().toLowerCase());
-const rulesText=()=>"rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n\n    function guru() {\n      return request.auth != null\n        && request.auth.token.email in ["+guruList().map(e=>"'"+e+"'").join(", ")+"];\n    }\n    function pemilik(id) {\n      return request.auth != null\n        && request.auth.token.firebase.sign_in_provider == 'anonymous'\n        && id.matches(request.auth.uid + '_.*');\n    }\n    function valid() {\n      let d = request.resource.data;\n      return d.keys().hasOnly(['nama','kode','uid','skor','maks','nilai','benar','salah','jawab','prog','status','sm','hal','aksi','pos','det','tm','mulai','selesai','last'])\n        && d.nama is string && d.nama.size() >= 2 && d.nama.size() <= 30\n        && d.kode is string && d.kode.size() >= 2 && d.kode.size() <= 12\n        && d.uid == request.auth.uid\n        && d.nilai is number && d.nilai >= 0 && d.nilai <= 100\n        && d.prog is number && d.prog >= 0 && d.prog <= 100\n        && d.status in ['Belum mulai','Sedang mengerjakan','Selesai']\n        && d.det is map && d.det.size() <= 20;\n    }\n\n    match /siswa/{id} {\n      allow read: if guru() || pemilik(id);\n      allow create, update: if pemilik(id) && valid();\n      allow delete: if guru();\n\n      match /log/{lid} {\n        allow read, delete: if guru();\n        allow create: if pemilik(id)\n          && request.resource.data.keys().hasOnly(['t','tipe','teks'])\n          && request.resource.data.tipe is string\n          && request.resource.data.tipe.size() <= 12\n          && request.resource.data.teks is string\n          && request.resource.data.teks.size() <= 200;\n      }\n    }\n  }\n}\n";
-function copyRules(){const t=rulesText();try{navigator.clipboard.writeText(t).then(()=>alert("Aturan sudah disalin."),()=>alert("Gagal menyalin. Blok teks lalu salin manual."))}catch(e){alert("Gagal menyalin. Blok teks lalu salin manual.")}}
-function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.fb?"Firebase (pemantauan real-time aktif)":"Penyimpanan lokal (tanpa real-time)")+'.</b> '+(DB.fb?"":"Nilai hanya tersimpan di browser perangkat ini, jadi guru tidak bisa memantau siswa yang memakai HP lain. Sandi awal mode lokal: kelas4telkom (email boleh dikosongkan sampai guru menekan \"Ganti email & sandi\" di dashboard). Ini hanya pagar ringan karena kodenya bisa dibaca. Aktifkan Firebase dengan langkah berikut.")+'</p><ol><li>Buka console.firebase.google.com, buat proyek baru (Analytics boleh dimatikan).</li><li>Project settings (ikon roda gigi), bagian Your apps, pilih ikon web &lt;/&gt;, daftarkan aplikasi, lalu salin apiKey, authDomain, projectId, dan appId ke <code>CFG.firebase</code> di bagian atas script file index.html.</li><li>Build, Authentication, Sign-in method: aktifkan <b>Anonymous</b> dan <b>Email/Password</b>.</li><li>Authentication, Users, Add user: masukkan email guru (harus sama dengan salah satu email di <code>CFG.guruEmails</code>: <b>'+esc(guruList().join(", "))+'</b>) dan sandi sesuai keinginan guru.</li><li>Authentication, Settings, Authorized domains: tambahkan domain situs ini (contoh: namaakun.github.io).</li><li>Build, Firestore Database, Create database (lokasi asia-southeast2 Jakarta). Buka tab Rules, tempel aturan berikut, lalu Publish.</li></ol><pre>'+esc(rulesText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin aturan</button></p><p class="meta">Dengan aturan ini siswa hanya bisa menulis datanya sendiri, tidak bisa membaca atau mengubah data siswa lain, dan hanya akun guru yang bisa membaca seluruh data.</p></details>'}
+const sqlText=()=>`-- Jalankan di Supabase: SQL Editor > New query > Run
+create table if not exists public.siswa (
+  id text primary key,
+  d jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.siswa_log (
+  id bigint generated always as identity primary key,
+  siswa_id text not null references public.siswa(id) on delete cascade,
+  t bigint not null,
+  tipe text not null,
+  teks text not null
+);
+create index if not exists siswa_log_idx on public.siswa_log (siswa_id, t desc);
+
+alter table public.siswa enable row level security;
+alter table public.siswa_log enable row level security;
+
+create or replace function public.is_guru() returns boolean
+language sql stable as $$
+  select coalesce((auth.jwt()->>'email') in (${guruList().map(e=>"'"+e.replace(/'/g,"''")+"'").join(", ")}), false)
+     and coalesce((auth.jwt()->>'is_anonymous')::boolean, false) = false
+$$;
+create or replace function public.is_owner(sid text) returns boolean
+language sql stable as $$
+  select auth.uid() is not null and left(sid, 37) = auth.uid()::text || '_'
+$$;
+
+drop policy if exists siswa_select on public.siswa;
+drop policy if exists siswa_insert on public.siswa;
+drop policy if exists siswa_update on public.siswa;
+drop policy if exists siswa_delete on public.siswa;
+create policy siswa_select on public.siswa for select to authenticated
+  using (public.is_guru() or public.is_owner(id));
+create policy siswa_insert on public.siswa for insert to authenticated
+  with check (public.is_owner(id)
+    and length(d->>'nama') between 2 and 30
+    and length(d->>'kode') between 2 and 12);
+create policy siswa_update on public.siswa for update to authenticated
+  using (public.is_owner(id))
+  with check (public.is_owner(id)
+    and length(d->>'nama') between 2 and 30
+    and length(d->>'kode') between 2 and 12);
+create policy siswa_delete on public.siswa for delete to authenticated
+  using (public.is_guru());
+
+drop policy if exists log_select on public.siswa_log;
+drop policy if exists log_insert on public.siswa_log;
+drop policy if exists log_delete on public.siswa_log;
+create policy log_select on public.siswa_log for select to authenticated
+  using (public.is_guru());
+create policy log_insert on public.siswa_log for insert to authenticated
+  with check (public.is_owner(siswa_id) and length(teks) <= 200 and length(tipe) <= 12);
+create policy log_delete on public.siswa_log for delete to authenticated
+  using (public.is_guru());
+
+-- Real-time (abaikan error jika tabel sudah terdaftar)
+alter publication supabase_realtime add table public.siswa;
+`;
+function copyRules(){const t=sqlText();try{navigator.clipboard.writeText(t).then(()=>alert("SQL sudah disalin."),()=>alert("Gagal menyalin. Blok teks lalu salin manual."))}catch(e){alert("Gagal menyalin. Blok teks lalu salin manual.")}}
+function guide(){return'<details><summary><b>Petunjuk teknis (untuk guru)</b></summary><p><b>Mode saat ini: '+(DB.fb?"Supabase (pemantauan real-time aktif)":"Penyimpanan lokal (tanpa real-time)")+'.</b> '+(DB.fb?"":"Nilai hanya tersimpan di browser perangkat ini, jadi guru tidak bisa memantau siswa yang memakai HP lain. Sandi awal mode lokal: kelas4telkom (email boleh dikosongkan sampai guru menekan \"Ganti email & sandi\" di dashboard). ")+'</p><p class="meta">Proyek Supabase: '+esc(CFG.supabase.url)+'</p><ol><li>Buka dashboard Supabase proyek ini, menu <b>SQL Editor</b>, New query. Tempel SQL di bawah, lalu klik <b>Run</b>.</li><li>Menu <b>Authentication, Sign In / Providers</b>: aktifkan <b>Allow anonymous sign-ins</b> (dipakai siswa) dan pastikan <b>Email</b> aktif (dipakai guru).</li><li>Menu <b>Authentication, Users, Add user, Create new user</b>: masukkan email guru (harus sama dengan salah satu email di <code>CFG.guruEmails</code> pada kode: <b>'+esc(guruList().join(", "))+'</b>) dan sandi pilihan guru. Centang Auto Confirm User.</li><li>Jika email guru berbeda, ubah <code>CFG.guruEmails</code> di bagian atas script, lalu jalankan ulang SQL (aman dijalankan berulang).</li><li>Login di halaman ini memakai email dan sandi tersebut.</li></ol><pre>'+esc(sqlText())+'</pre><p><button class="btn ghost" onclick="copyRules()">📋 Salin SQL</button></p><p class="meta">Dengan aturan ini siswa hanya bisa menulis datanya sendiri, tidak bisa membaca atau mengubah data siswa lain, dan hanya akun guru yang bisa membaca seluruh data.</p></details>'}
 const VIEWS={
  gate:()=>gateHTML(),
  siswa:()=>'<div class="card"><h2>Masuk sebagai Siswa 🎒</h2>'+bub("senang","Tulis namamu dan kode kelasmu dari Bapak atau Ibu Guru, ya! Pakai nama dan kode yang sama setiap kali masuk, supaya kamu lanjut dari terakhir.")+'<label for="nm">Nama</label><input id="nm" maxlength="30" autocomplete="off" placeholder="Tulis namamu"><label for="kd">Kode kelas</label><input id="kd" maxlength="12" autocomplete="off" placeholder="Contoh: IVA"><div id="er" class="fb bad" hidden></div><p><button class="btn go" onclick="mulai()">Mulai Petualangan ▶</button><button class="btn ghost" onclick="go(\'gate\')">◀ Kembali</button></p></div>',
@@ -368,7 +442,7 @@ const VIEWS={
    dn=A.filter(r=>stt(r)==="Selesai"),av=dn.length?Math.round(dn.reduce((s,r)=>s+(r.nilai||0),0)/dn.length*10)/10:0,pc=n=>A.length?n/A.length*100:0;
   const an=Q.map(q=>{const ans=A.map(r=>detOf(r,q.id)).filter(Boolean),ok=ans.filter(d=>d.p===q.w).length;return{q,n:ans.length,ok,pr:ans.length?Math.round(ok/ans.length*100):0}});
   const rows=D.length?D.map((r,k)=>'<tr><td>'+(k+1)+'</td><td><span class="dot '+(online(r)?"on":"")+'" title="'+(online(r)?"Sedang online":"Tidak aktif")+'"></span><b>'+esc(r.nama)+'</b></td><td>'+esc(r.kode)+'</td><td>'+bd(r)+'</td><td><small>'+esc(r.hal||"-")+'</small></td><td><div class="pb2"><i style="width:'+(r.prog||0)+'%"></i></div>'+(r.prog||0)+'%</td><td><b>'+fm(r.nilai||0)+'</b><br><small>'+fm(r.skor||0)+'/'+(r.maks||0)+'</small></td><td>'+(r.benar||0)+' / '+(r.salah||0)+'</td><td>'+clk(tms(r.mulai))+'</td><td>'+(tms(r.selesai)?clk(tms(r.selesai)):"-")+'</td><td><small>'+ago(tms(r.last))+'</small></td><td><button class="btn ghost" style="min-height:36px;padding:4px 10px;margin:0" onclick="go(\'detail\',{k:\''+esc(r.k)+'\'})">Lihat</button></td></tr>').join(""):'<tr><td colspan="12">Belum ada siswa yang bergabung.</td></tr>';
-  return'<div class="card"><h2>Dashboard Guru 📊</h2>'+(V.p.err?'<div class="fb bad">'+V.p.err+'</div>':'')+'<p class="meta">'+(DB.fb?"🟢 Terhubung ke Firebase. Data siswa masuk otomatis tanpa perlu menyegarkan halaman.":"Mode lokal: hanya menampilkan siswa yang memakai perangkat ini.")+'</p>'
+  return'<div class="card"><h2>Dashboard Guru 📊</h2>'+(V.p.err?'<div class="fb bad">'+V.p.err+'</div>':'')+'<p class="meta">'+(DB.fb?"🟢 Terhubung ke Supabase. Data siswa masuk otomatis tanpa perlu menyegarkan halaman.":"Mode lokal: hanya menampilkan siswa yang memakai perangkat ini.")+'</p>'
   +'<div class="grid"><div class="tile"><b>'+A.length+'</b> siswa bergabung</div><div class="tile"><span class="dot on"></span><b>'+on+'</b> sedang online</div><div class="tile"><b>'+c0+'</b> belum mulai</div><div class="tile"><b>'+c1+'</b> sedang mengerjakan</div><div class="tile"><b>'+c2+'</b> selesai</div><div class="tile">Rata-rata nilai: <b>'+fm(av)+'</b></div></div>'
   +'<div class="sbar" role="img" aria-label="Belum mulai '+c0+', sedang mengerjakan '+c1+', selesai '+c2+'"><i style="width:'+pc(c0)+'%;background:#9ca3af"></i><i style="width:'+pc(c1)+'%;background:#f5b82e"></i><i style="width:'+pc(c2)+'%;background:#2e9e48"></i></div><p class="meta">⚪ Belum mulai | 🟡 Sedang mengerjakan | 🟢 Selesai</p>'
   +(DB.fb?'<h3>Aktivitas terbaru</h3><div class="feed">'+(FEED.length?FEED.map(x=>'<div><span class="meta">'+clk(x.t)+'</span> '+esc(x.txt)+'</div>').join(""):'<div class="meta">Menunggu aktivitas siswa...</div>')+'</div>':'')
@@ -394,10 +468,10 @@ async function mulai(){if(joining)return;const n=$("#nm").value.trim().replace(/
  if(n.length<2)return err("Tulis namamu dulu, minimal 2 huruf ya.");if(k.length<2)return err("Tulis kode kelasmu dulu ya.");
  joining=true;const bt=document.querySelector('button[onclick="mulai()"]');if(bt){bt.disabled=true;bt.textContent="Menghubungkan..."}
  S={role:"siswa",guru:false,nama:n,kode:k,ans:{},tmp:{},fail:0,until:0,pop:false,sm:false,fin:false,isNew:true};
- DB.q={};DB.lq=[];DB.id=null;let cloud=null;
+ DB.q={};DB.lq=[];DB.id=null;DB.own={};DB.warned=false;let cloud=null;
  if(DB.fb){
-  try{DB.uid=await DB.anon();DB.id=DB.uid+"_"+keyOf()}catch(e){DB.uid=null;DB.id=null;alert("Koneksi ke server belum aktif. Nilaimu tersimpan di perangkat ini dulu.")}
-  if(DB.id){try{cloud=await DB.getOwn()}catch(e){if(e&&e.code==="permission-denied"){DB.id=null;alert("Aturan database (Rules) belum benar, jadi nilaimu hanya tersimpan di perangkat ini. Beri tahu gurumu.")}}}}
+  try{DB.uid=await DB.anon();DB.id=DB.uid+"_"+keyOf()}catch(e){DB.uid=null;DB.id=null;console.warn(e);alert("Koneksi ke server belum aktif (pastikan Anonymous sign-in sudah diaktifkan di Supabase). Nilaimu tersimpan di perangkat ini dulu.")}
+  if(DB.id){try{cloud=await DB.getOwn()}catch(e){console.warn(e);DB.id=null;alert("Tabel database (Supabase) belum siap, jadi nilaimu hanya tersimpan di perangkat ini. Beri tahu gurumu.")}}}
  const k0=keyOf(),ses=loadSes(k0),cans=cloud&&cloud.det?ansFrom(cloud.det):{},lans=ses&&ses.ans?ses.ans:{},nl=Object.keys(lans).length,nc=Object.keys(cans).length;
  let pos=null,back=false;
  if(nl&&nl>=nc){S.ans=lans;S.tmp=ses.tmp||{};pos=ses.pos;back=true}
@@ -413,22 +487,25 @@ function ulang(){S.ans={};S.tmp={};S.fin=false;save("ulang","Mengulang pembelaja
 async function masuk(){if(Date.now()<S.until)return err("Terlalu banyak percobaan. Tunggu 30 detik.");
  const pw=$("#pw").value;let ok=false,msg="Sandi salah.";
  try{const em=$("#em").value.trim();
-  if(DB.fb){if(!em)return err("Isi email guru.");await DB.fb.auth.signInWithEmailAndPassword(em,pw);ok=true}
+  if(DB.fb){if(!em)return err("Isi email guru.");
+   const r=await DB.fb.auth.signInWithPassword({email:em,password:pw});
+   if(r.error){const m=String(r.error.message||"").toLowerCase();
+    if(/fetch|network/.test(m))return err("Tidak ada koneksi internet. Coba lagi.");
+    if(r.error.status===429)return err("Terlalu banyak percobaan. Tunggu beberapa menit.");
+    msg="Email atau sandi salah, atau akun guru belum dibuat di Supabase."}
+   else if(!guruList().includes(em.toLowerCase())){try{await DB.fb.auth.signOut()}catch(e){}msg="Akun ini tidak terdaftar sebagai guru di CFG.guruEmails."}
+   else ok=true}
   else{let s=null,se=null;try{s=localStorage.getItem("kp_pw");se=localStorage.getItem("kp_em")}catch(e){}
    ok=h53("kp:"+pw)===(s||CFG.teacherHash)&&(!se||em.toLowerCase()===se);
    if(!ok)msg="Email atau sandi salah."}}
- catch(e){ok=false;const c=e&&e.code;
-  if(c==="auth/network-request-failed")return err("Tidak ada koneksi internet. Coba lagi.");
-  if(c==="auth/too-many-requests")return err("Terlalu banyak percobaan. Tunggu beberapa menit.");
-  if(c==="auth/operation-not-allowed")return err("Login Email/Password belum diaktifkan di Firebase.");
-  msg="Email atau sandi salah, atau akun guru belum dibuat di Firebase."}
+ catch(e){ok=false;msg="Gagal masuk. Periksa koneksi internet dan coba lagi."}
  if(!ok){if(++S.fail>=5){S.until=Date.now()+30000;S.fail=0}return err(msg)}
  S.role="guru";S.guru=true;go("dash")}
 function gantiSandi(){const em=(prompt("Email guru baru:")||"").trim().toLowerCase();if(!/^\S+@\S+\.\S+$/.test(em))return alert("Format email tidak valid.");
  const p=prompt("Sandi baru (minimal 6 karakter):");if(!p)return;if(p.length<6)return alert("Sandi terlalu pendek.");
  try{localStorage.setItem("kp_em",em);localStorage.setItem("kp_pw",h53("kp:"+p));alert("Email dan sandi diganti. Catatan: hanya berlaku di browser ini.")}catch(e){alert("Gagal menyimpan.")}}
-function hapusSemua(){if(confirm("Hapus SEMUA data siswa? Tindakan ini tidak dapat dibatalkan."))DB.clear().then(()=>{ROWS=[];FEED=[];PREV={};V.p.rows=DB.fb?ROWS:null;render(1)}).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Firebase."))}
-function hapusSiswa(k){if(confirm("Hapus data siswa ini? Tindakan ini tidak dapat dibatalkan."))DB.del1(k).then(()=>go("dash")).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Firebase."))}
+function hapusSemua(){if(confirm("Hapus SEMUA data siswa? Tindakan ini tidak dapat dibatalkan."))DB.clear().then(()=>{ROWS=[];FEED=[];PREV={};V.p.rows=DB.fb?ROWS:null;render(1)}).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Supabase."))}
+function hapusSiswa(k){if(confirm("Hapus data siswa ini? Tindakan ini tidak dapat dibatalkan."))DB.del1(k).then(()=>{ROWS=ROWS.filter(r=>r.k!==k);go("dash",{rows:DB.fb?ROWS:null})}).catch(()=>alert("Gagal menghapus. Periksa koneksi dan aturan Supabase."))}
 function dl(name,head,rows){const q=v=>{v=String(v==null?"":v);if(/^[=+\-@]/.test(v))v="'"+v;return'"'+v.replace(/"/g,'""')+'"'};
  const b=new Blob(["\ufeff"+[head.map(q).join(",")].concat(rows.map(r=>r.map(q).join(","))).join("\n")],{type:"text/csv"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 const fsel=()=>{const f=V.p.f||"";return(V.p.rows||[]).filter(r=>!f||r.kode===f)};
